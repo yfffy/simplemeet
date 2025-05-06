@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  simplemeet:
+    build: .
+    container_name: simplemeet_app
+    ports:
+      - "5000:5000" # Map host port 5000 to container port 5000
+    volumes:
+      - simplemeet_db:/app/db # Map the named volume to /app/db directory
+    # Environment variables can be added here if needed
+    # environment:
+    #   - FLASK_ENV=production
+
+volumes:
+  simplemeet_db: # Define the named volume for the database
