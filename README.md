@@ -40,7 +40,7 @@ A simple web application to share and view real-time locations using a shared co
 ### Running with Docker
 
 1.  Ensure Docker and Docker Compose are installed.
-2.  Navigate to the project directory in your terminal.
+2.  Clone the repository and navigate to the project directory in your terminal.
 3.  Build and run the container:
     ```bash
     docker compose up --build -d
