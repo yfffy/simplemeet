@@ -230,6 +230,11 @@ def index():
     """Serves the main HTML page."""
     return render_template('index.html')
 
+@app.route('/offline.html')
+def offline():
+    """Serves the offline page for PWA."""
+    return render_template('offline.html')
+
 # --- SocketIO Events (Database Aware) ---
 
 @socketio.on('connect')

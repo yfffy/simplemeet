@@ -2,45 +2,107 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Meet</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- PWA Meta Tags -->
+    <title>SimpleMeet - Share Your Location</title>
+    <meta name="description" content="Real-time location sharing made simple. Create a share code and track locations with friends and family.">
+    <meta name="theme-color" content="#007bff">
+    <meta name="background-color" content="#f8f9fa">
+    
+    <!-- Apple PWA Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="SimpleMeet">
+    
+    <!-- Microsoft PWA Meta Tags -->
+    <meta name="msapplication-TileColor" content="#007bff">
+    <meta name="msapplication-config" content="/static/browserconfig.xml">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/static/manifest.json">
+    
+    <!-- Icons -->
+    <link rel="icon" type="image/x-icon" href="/static/icons/favicon.ico">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16x16.png">
+    
+    <!-- External Stylesheets -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <link rel="stylesheet" href="/static/css/style.css">
+    
+    <!-- Preload critical resources -->
+    <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" as="script">
+    <link rel="preload" href="https://cdn.socket.io/4.7.5/socket.io.min.js" as="script">
 </head>
 <body>
-    <h1>Simple Meet</h1>
+    <header>
+        <h1>📍 SimpleMeet</h1>
+        <div id="status">Connecting...</div>
+    </header>
 
-    <div id="status">Connecting...</div>
-
-    <div id="initial-options">
-        <div id="create-section">
-            <button id="create-share-btn">Create Share</button>
+    <main>
+        <div id="initial-options">
+            <div id="create-section">
+                <button id="create-share-btn">🎯 Create Share</button>
+            </div>
+            <div id="join-section">
+                <span>OR</span>
+                <input type="text" id="share-code-input" placeholder="Enter Share Code (e.g., ABC-123)" autocomplete="off" autocapitalize="characters">
+                <button id="join-share-btn">🔗 Join Share</button>
+            </div>
         </div>
-        <div id="join-section">
-            <span>OR</span>
-            <input type="text" id="share-code-input" placeholder="Enter Share Code">
-            <button id="join-share-btn">Join</button>
+
+        <div id="sharing-info" style="display: none;">
+            <div>
+                <span>Share Code:</span>
+                <strong id="share-code-display"></strong>
+            </div>
+            <div class="button-group">
+                <button id="copy-share-btn" title="Copy Share Code">📋 Copy</button>
+                <button id="leave-share-btn">🚪 Leave</button>
+            </div>
         </div>
-    </div>
 
-    <div id="sharing-info" style="display: none;">
-        <span>Share Code: <strong id="share-code-display"></strong></span>
-        <button id="copy-share-btn" style="margin-left: 10px;" title="Copy Share Code">Copy</button>
-        <button id="leave-share-btn" style="margin-left: 15px;">Leave Share</button>
-    </div>
-
-    <div id="map"></div>
+        <div id="map"></div>
+    </main>
 
     <!-- User List Container -->
     <div id="user-list-container">
-        <h2>Users in Share</h2>
+        <h2>👥 Users in Share</h2>
         <ul id="user-list">
             <!-- User items will be added here by JS -->
         </ul>
     </div>
 
+    <!-- PWA Install Prompt -->
+    <div id="install-prompt" style="display: none;">
+        <p>📱 Install SimpleMeet for the best mobile experience!</p>
+        <div class="button-group">
+            <button id="install-yes">Install</button>
+            <button id="install-later">Later</button>
+        </div>
+    </div>
+
+    <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="/static/js/main.js"></script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/sw.js')
+                    .then((registration) => {
+                        console.log('SW registered: ', registration);
+                    })
+                    .catch((registrationError) => {
+                        console.log('SW registration failed: ', registrationError);
+                    });
+            });
+        }
+    </script>
 </body>
 </html>

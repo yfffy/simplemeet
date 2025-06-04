@@ -38,6 +38,11 @@ let reconnectAttempts = 0;
 let lastLocationUpdate = 0; // Timestamp of last location update
 let rateLimitDelay = 0; // Rate limiting for location updates
 
+// PWA State
+let deferredInstallPrompt = null;
+let isInstalled = false;
+let isOnline = navigator.onLine;
+
 // --- UI Elements ---
 const initialOptionsDiv = document.getElementById('initial-options');
 const sharingInfoDiv = document.getElementById('sharing-info');
@@ -53,6 +58,11 @@ const leaveShareBtn = document.getElementById('leave-share-btn');
 const userListContainer = document.getElementById('user-list-container');
 const userListElement = document.getElementById('user-list');
 const copyShareBtn = document.getElementById('copy-share-btn'); // Get copy button
+
+// PWA Elements
+const installPrompt = document.getElementById('install-prompt');
+const installYesBtn = document.getElementById('install-yes');
+const installLaterBtn = document.getElementById('install-later');
 
 // --- Initialization ---
 function initializeMap() {
@@ -205,72 +215,114 @@ function startLocationUpdates() {
     if (locationWatchId) {
         console.log("Clearing existing location watch ID:", locationWatchId);
         navigator.geolocation.clearWatch(locationWatchId);
-        locationWatchId = null; // Ensure it's reset
+        locationWatchId = null;
     }
 
-    if ('geolocation' in navigator && 'watchPosition' in navigator.geolocation) {
-        console.log("Geolocation API and watchPosition supported.");
-        try {
-            console.log("Calling navigator.geolocation.watchPosition...");
-            locationWatchId = navigator.geolocation.watchPosition(
-                (position) => {
-                    console.log("watchPosition SUCCESS callback fired.", position);
-                    lastPosition = position; // Store for potential later use
-                    const { latitude, longitude, heading, speed } = position.coords;
-                    console.log(`Location update: ${latitude}, ${longitude}, Heading: ${heading}`);
+    if (!('geolocation' in navigator)) {
+        showToast('❌ Geolocation not supported on this device', 'error');
+        return;
+    }
 
-                    // Update our own marker immediately
-                    if (socket && socket.id) {
-                        console.log(`Updating own marker (${socket.id}) with color ${userColor}`);
-                        updateMarker(socket.id, { lat: latitude, lon: longitude, heading: heading, color: userColor });
-                    } else {
-                        console.warn("Cannot update own marker: socket or socket.id is missing.");
-                    }
-
-                    // Send update to server
-                    if (socket && socket.connected && shareCode) {
-                        console.log("Emitting location_update to server.");
-                        socket.emit('location_update', {
-                            lat: latitude,
-                            lon: longitude,
-                            heading: heading, // Can be null if device doesn't support/provide it
-                            // speed: speed // Could also send speed
-                        });
-                    } else {
-                        console.warn("Cannot emit location_update: socket not connected or shareCode missing.");
-                    }
-                },
-                (error) => {
-                    console.error("watchPosition ERROR callback fired.");
-                    console.error(`Geolocation Error: ${error.message} (Code: ${error.code})`, error);
-                    // Handle errors like PERMISSION_DENIED (1), POSITION_UNAVAILABLE (2), TIMEOUT (3)
-                    let alertMsg = `Geolocation error: ${error.message}`;
-                    if (error.code === 1) {
-                        alertMsg = "Location permission denied. Please enable location access in your browser settings and refresh the page to use this app.";
-                        stopLocationUpdates(); // Stop trying if permission denied
-                    }
-                     else if (error.code === 2) {
-                        alertMsg = "Location currently unavailable. Ensure location services are enabled on your device.";
-                    }
-                    else if (error.code === 3) {
-                        alertMsg = "Timeout getting location. Trying again..."; // watchPosition should retry automatically
-                    }
-                    alert(alertMsg);
-                },
-                {
-                    enableHighAccuracy: true, // Request high accuracy
-                    maximumAge: 0, // Don't use cached position
-                    timeout: 15000 // Increased timeout to 15 seconds
-                }
-            );
-            console.log("watchPosition called. Watch ID:", locationWatchId);
-        } catch (e) {
-            console.error("Error calling watchPosition:", e);
-            alert("An unexpected error occurred while trying to access your location.");
+    // Request permission first
+    navigator.permissions.query({name: 'geolocation'}).then(result => {
+        console.log('Geolocation permission:', result.state);
+        
+        if (result.state === 'denied') {
+            showToast('📍 Location permission denied. Please enable in settings.', 'error');
+            return;
         }
-    } else {
-        console.error("Geolocation API or watchPosition not supported by this browser.");
-        alert('Geolocation is not supported by your browser or device.');
+        
+        startWatchingPosition();
+    }).catch(() => {
+        // Fallback if permissions API not supported
+        startWatchingPosition();
+    });
+}
+
+function startWatchingPosition() {
+    try {
+        locationWatchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const now = Date.now();
+                lastPosition = position;
+                const { latitude, longitude, heading, speed } = position.coords;
+                
+                // Rate limiting - don't send updates too frequently
+                if (now - lastLocationUpdate < UPDATE_INTERVAL_MS) {
+                    return;
+                }
+                lastLocationUpdate = now;
+                
+                console.log(`Location update: ${latitude}, ${longitude}, Heading: ${heading}`);
+
+                // Update our own marker immediately
+                if (socket && socket.id) {
+                    updateMarker(socket.id, { 
+                        lat: latitude, 
+                        lon: longitude, 
+                        heading: heading, 
+                        color: userColor 
+                    });
+                }
+
+                // Send update to server if connected
+                if (socket && socket.connected && shareCode) {
+                    socket.emit('location_update', {
+                        lat: latitude,
+                        lon: longitude,
+                        heading: heading
+                    });
+                } else if (!isOnline) {
+                    // Store for later sync when online
+                    storeLocationForSync(latitude, longitude, heading);
+                }
+            },
+            (error) => {
+                console.error(`Geolocation Error: ${error.message} (Code: ${error.code})`);
+                
+                let message = `Location error: ${error.message}`;
+                let type = 'error';
+                
+                switch (error.code) {
+                    case 1: // PERMISSION_DENIED
+                        message = '📍 Location permission denied. Please enable location access in your browser settings.';
+                        stopLocationUpdates();
+                        break;
+                    case 2: // POSITION_UNAVAILABLE
+                        message = '📡 Location currently unavailable. Please check your device settings.';
+                        type = 'warning';
+                        break;
+                    case 3: // TIMEOUT
+                        message = '⏱️ Location request timed out. Retrying...';
+                        type = 'warning';
+                        break;
+                }
+                
+                showToast(message, type);
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 30000, // Accept cached position up to 30 seconds old
+                timeout: 15000
+            }
+        );
+        
+        console.log("watchPosition started. Watch ID:", locationWatchId);
+    } catch (e) {
+        console.error("Error calling watchPosition:", e);
+        showToast('❌ Error accessing location services', 'error');
+    }
+}
+
+function storeLocationForSync(lat, lon, heading) {
+    // Store location data for background sync when online
+    if ('localStorage' in window) {
+        const locationData = {
+            lat, lon, heading,
+            timestamp: Date.now(),
+            shareCode
+        };
+        localStorage.setItem('pendingLocation', JSON.stringify(locationData));
     }
 }
 
@@ -445,9 +497,14 @@ function joinShare() {
 
 // --- Initial Setup ---
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('SimpleMeet PWA initializing...');
     initializeMap();
     connectWebSocket();
+    initializePWA(); // Initialize PWA features
     mapDiv.style.display = 'none'; // Hide map initially
+    
+    // Show a welcome message
+    showToast('📍 Welcome to SimpleMeet!', 'info', 2000);
 });
 
 // --- Share Management ---
@@ -529,38 +586,54 @@ function updateUserList(users) {
     if (!userListElement) return;
     console.log("Updating user list display with:", users);
 
-    userListElement.innerHTML = ''; // Clear current list
+    // Show user list with animation on mobile
+    if (users && users.length > 0) {
+        userListContainer.style.display = 'block';
+        setTimeout(() => {
+            userListContainer.classList.add('show');
+        }, 100);
+    }
+
+    userListElement.innerHTML = '';
 
     if (!users || users.length === 0) {
         const li = document.createElement('li');
         li.textContent = 'No other users in share.';
         li.style.fontStyle = 'italic';
+        li.style.color = '#6c757d';
         userListElement.appendChild(li);
         return;
     }
 
-    users.sort((a, b) => (a.username || '').localeCompare(b.username || '')); // Sort alphabetically
+    users.sort((a, b) => (a.username || '').localeCompare(b.username || ''));
 
     users.forEach(user => {
         const li = document.createElement('li');
-        li.dataset.sid = user.sid; // Store sid for potential future use
+        li.dataset.sid = user.sid;
 
         const iconSpan = document.createElement('span');
         iconSpan.className = 'user-color-icon';
-        iconSpan.style.backgroundColor = user.color || '#808080'; // Use user's color
+        iconSpan.style.backgroundColor = user.color || '#808080';
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'username';
         let displayName = user.username || `User ${user.sid.substring(0,4)}`;
         if (socket && user.sid === socket.id) {
             displayName += ' (You)';
-            li.style.fontWeight = 'bold'; // Highlight self
+            li.style.fontWeight = 'bold';
         }
         nameSpan.textContent = displayName;
-        nameSpan.title = displayName; // Show full name on hover if truncated
+        nameSpan.title = displayName;
+
+        // Add online/offline indicator
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'user-status';
+        statusSpan.textContent = user.lat !== null ? '🟢' : '🔴';
+        statusSpan.title = user.lat !== null ? 'Online' : 'Offline';
 
         li.appendChild(iconSpan);
         li.appendChild(nameSpan);
+        li.appendChild(statusSpan);
         userListElement.appendChild(li);
     });
 }
@@ -591,3 +664,186 @@ copyShareBtn.addEventListener('click', () => {
         console.error('Cannot copy: Share code is missing or clipboard API unavailable.');
     }
 });
+
+// PWA Functions
+function initializePWA() {
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+        isInstalled = true;
+        console.log('PWA is installed');
+    }
+
+    // Listen for beforeinstallprompt event
+    window.addEventListener('beforeinstallprompt', (e) => {
+        console.log('beforeinstallprompt fired');
+        e.preventDefault();
+        deferredInstallPrompt = e;
+        
+        if (!isInstalled) {
+            showInstallPrompt();
+        }
+    });
+
+    // Listen for appinstalled event
+    window.addEventListener('appinstalled', () => {
+        console.log('PWA installed successfully');
+        isInstalled = true;
+        hideInstallPrompt();
+        showToast('📱 SimpleMeet installed successfully!', 'success');
+    });
+
+    // Online/offline detection
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Handle visibility changes (PWA lifecycle)
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Setup install prompt handlers
+    if (installYesBtn) {
+        installYesBtn.addEventListener('click', installPWA);
+    }
+    if (installLaterBtn) {
+        installLaterBtn.addEventListener('click', hideInstallPrompt);
+    }
+
+    // Check URL parameters for shortcuts
+    handleURLActions();
+}
+
+function showInstallPrompt() {
+    if (installPrompt && !isInstalled) {
+        installPrompt.style.display = 'block';
+        setTimeout(() => {
+            installPrompt.classList.add('show');
+        }, 100);
+    }
+}
+
+function hideInstallPrompt() {
+    if (installPrompt) {
+        installPrompt.classList.remove('show');
+        setTimeout(() => {
+            installPrompt.style.display = 'none';
+        }, 300);
+    }
+}
+
+async function installPWA() {
+    if (deferredInstallPrompt) {
+        try {
+            const result = await deferredInstallPrompt.prompt();
+            console.log('Install prompt result:', result);
+            
+            if (result.outcome === 'accepted') {
+                console.log('User accepted the install prompt');
+            } else {
+                console.log('User dismissed the install prompt');
+                hideInstallPrompt();
+            }
+            
+            deferredInstallPrompt = null;
+        } catch (error) {
+            console.error('Error showing install prompt:', error);
+            hideInstallPrompt();
+        }
+    }
+}
+
+function handleOnline() {
+    console.log('App is online');
+    isOnline = true;
+    updateStatus('Connected. Ready to share locations.');
+    
+    // Reconnect socket if needed
+    if (!socket || !socket.connected) {
+        connectWebSocket();
+    }
+    
+    showToast('🌐 Back online!', 'success');
+}
+
+function handleOffline() {
+    console.log('App is offline');
+    isOnline = false;
+    updateStatus('Offline. Some features may be limited.');
+    showToast('📵 You are offline', 'warning');
+}
+
+function handleVisibilityChange() {
+    if (document.hidden) {
+        console.log('App hidden');
+        // Reduce location update frequency when hidden
+    } else {
+        console.log('App visible');
+        // Resume normal operation
+        if (shareCode && (!socket || !socket.connected)) {
+            connectWebSocket();
+        }
+    }
+}
+
+function handleURLActions() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const action = urlParams.get('action');
+    
+    if (action === 'create') {
+        // Auto-trigger create share
+        setTimeout(() => {
+            if (createShareBtn && !shareCode) {
+                createShareBtn.click();
+            }
+        }, 1000);
+    } else if (action === 'join') {
+        // Focus on join input
+        setTimeout(() => {
+            if (shareCodeInput && !shareCode) {
+                shareCodeInput.focus();
+            }
+        }, 500);
+    }
+}
+
+function showToast(message, type = 'info', duration = 3000) {
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    
+    // Style the toast
+    Object.assign(toast.style, {
+        position: 'fixed',
+        top: '20px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: type === 'success' ? '#28a745' : 
+                   type === 'warning' ? '#ffc107' : 
+                   type === 'error' ? '#dc3545' : '#007bff',
+        color: type === 'warning' ? '#000' : '#fff',
+        padding: '12px 24px',
+        borderRadius: '8px',
+        zIndex: '9999',
+        fontSize: '14px',
+        fontWeight: '500',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        opacity: '0',
+        transition: 'opacity 0.3s ease'
+    });
+    
+    document.body.appendChild(toast);
+    
+    // Show toast
+    setTimeout(() => {
+        toast.style.opacity = '1';
+    }, 100);
+    
+    // Hide and remove toast
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 300);
+    }, duration);
+}

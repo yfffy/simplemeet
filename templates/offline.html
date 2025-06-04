@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>SimpleMeet - Offline</title>
+    <meta name="theme-color" content="#007bff">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .offline-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+            padding: 2rem;
+        }
+        
+        .offline-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.7;
+        }
+        
+        .offline-title {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+        }
+        
+        .offline-message {
+            color: var(--secondary-color);
+            margin-bottom: 2rem;
+            max-width: 400px;
+            line-height: 1.6;
+        }
+        
+        .retry-btn {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .retry-btn:hover {
+            background-color: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+        
+        .offline-features {
+            margin-top: 2rem;
+            text-align: left;
+            max-width: 300px;
+        }
+        
+        .offline-features h3 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+        }
+        
+        .offline-features ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .offline-features li {
+            padding: 0.5rem 0;
+            color: var(--secondary-color);
+        }
+        
+        .offline-features li::before {
+            content: "✓ ";
+            color: var(--success-color);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="offline-container">
+        <div class="offline-icon">📵</div>
+        <h1 class="offline-title">You're Offline</h1>
+        <p class="offline-message">
+            SimpleMeet needs an internet connection to share locations in real-time. 
+            Please check your connection and try again.
+        </p>
+        
+        <button class="retry-btn" onclick="window.location.reload()">
+            🔄 Try Again
+        </button>
+        
+        <div class="offline-features">
+            <h3>What works offline:</h3>
+            <ul>
+                <li>View cached map tiles</li>
+                <li>Access your last known location</li>
+                <li>Use the app interface</li>
+                <li>View cached share codes</li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        // Auto-reload when connection is restored
+        window.addEventListener('online', () => {
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 1000);
+        });
+        
+        // Show connection status
+        function updateConnectionStatus() {
+            if (navigator.onLine) {
+                window.location.href = '/';
+            }
+        }
+        
+        // Check connection every 5 seconds
+        setInterval(updateConnectionStatus, 5000);
+    </script>
+</body>
+</html> 
