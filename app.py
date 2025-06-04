@@ -19,16 +19,42 @@ import random
 import string
 import sqlite3
 import time
+import logging
 from flask import Flask, render_template, request, jsonify, session, g 
 from flask_socketio import SocketIO, emit, join_room, leave_room, send
 from flask_cors import CORS
+import secrets
+import re
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('simplemeet.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # --- Configuration & Setup ---
 DB_DIR = 'db'
 DB_PATH = os.path.join(DB_DIR, 'locations.db')
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.urandom(24)
+# Use persistent secret key from environment or generate a secure one
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+
+# Security headers
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    if request.is_secure:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
+
 CORS(app)
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
@@ -55,6 +81,7 @@ def get_db():
     """Opens a new database connection if there is none yet for the current application context."""
     if 'db' not in g:
         g.db = sqlite3.connect(DB_PATH, check_same_thread=False)
+        g.db.execute('PRAGMA foreign_keys = ON')  # Ensure foreign keys are enabled
         g.db.row_factory = sqlite3.Row 
     return g.db
 
@@ -68,14 +95,19 @@ def close_db(error):
 def init_db():
     """Initializes the database and creates tables if they don't exist."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute('PRAGMA foreign_keys = ON')  # Enable foreign key constraints
+    conn.execute('PRAGMA journal_mode = WAL')  # Better concurrent access
     cursor = conn.cursor()
     print("Initializing database...")
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS shares (
             share_code TEXT PRIMARY KEY,
-            created_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER))
+            created_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
+            expires_at INTEGER DEFAULT (CAST(strftime('%s', 'now', '+24 hours') AS INTEGER))
         )
     ''')
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             sid TEXT PRIMARY KEY,        
@@ -89,12 +121,31 @@ def init_db():
             FOREIGN KEY(share_code) REFERENCES shares(share_code) ON DELETE CASCADE
         )
     ''')
+    
+    # Add indexes for better performance
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_share_code ON users(share_code)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_shares_expires ON shares(expires_at)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_last_update ON users(last_update)')
+    
     conn.commit()
     conn.close()
-    print("Database initialized.")
+    print("Database initialized with foreign keys and WAL mode enabled.")
 
 # --- Helper Functions (Database Aware) ---
+
+def validate_share_code(share_code):
+    """Validates share code format and sanitizes input."""
+    if not share_code or not isinstance(share_code, str):
+        return None
+    
+    # Remove whitespace and convert to uppercase
+    code = share_code.strip().upper()
+    
+    # Validate format: exactly 3 letters, dash, 3 digits (ABC-123)
+    if not re.match(r'^[A-Z]{3}-[0-9]{3}$', code):
+        return None
+    
+    return code
 
 def generate_easy_code(length=6):
     """Generates a simple, memorable code and ensures it's unique in the DB."""
@@ -113,7 +164,7 @@ def generate_easy_code(length=6):
 
         cursor.execute('SELECT 1 FROM shares WHERE share_code = ?', (code,))
         if cursor.fetchone() is None:
-            return code 
+            return code
 
 def get_next_color(share_code):
     """Assigns the next available color based on users currently in the DB for this share."""
@@ -147,6 +198,31 @@ def emit_user_list_update(share_code):
     print(f"Emitting user list update for share: {share_code}")
     users_in_share = _get_users_in_share(share_code) # Fetches sid, username, color, etc.
     socketio.emit('user_list_update', {'users': users_in_share}, room=share_code)
+
+def cleanup_expired_shares():
+    """Remove expired shares and their associated users."""
+    try:
+        db = get_db()
+        cursor = db.cursor()
+        current_time = int(time.time())
+        
+        # Find expired shares
+        cursor.execute('SELECT share_code FROM shares WHERE expires_at < ?', (current_time,))
+        expired_shares = cursor.fetchall()
+        
+        if expired_shares:
+            expired_codes = [share['share_code'] for share in expired_shares]
+            logger.info(f"Cleaning up {len(expired_codes)} expired shares: {expired_codes}")
+            
+            # Delete expired shares (users will be deleted via CASCADE)
+            cursor.execute('DELETE FROM shares WHERE expires_at < ?', (current_time,))
+            db.commit()
+            
+            return len(expired_codes)
+        return 0
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+        return 0
 
 # --- Routes ---
 @app.route('/')
@@ -258,7 +334,10 @@ def handle_join_share(data):
         emit('join_error', {'message': 'Share code cannot be empty.'})
         return
 
-    share_code = share_code_input.upper()
+    share_code = validate_share_code(share_code_input)
+    if not share_code:
+        emit('join_error', {'message': 'Invalid share code format. Please use format ABC-123.'})
+        return
 
     with app.app_context():
         db = get_db()
@@ -277,7 +356,7 @@ def handle_join_share(data):
                 db.commit()
 
                 join_room(share_code) 
-                print(f'User {user_sid} ({default_username}) joined share {share_code} and was added to DB.')
+                logger.info(f'User {user_sid} ({default_username}) joined share {share_code}')
                 emit('joined_share', {'share_code': share_code, 'sid': user_sid, 'color': color, 'username': default_username})
 
                 cursor.execute('''
@@ -288,18 +367,18 @@ def handle_join_share(data):
                 existing_users_data = {row['sid']: {'username': row['username'], 'lat': row['lat'], 'lon': row['lon'], 'heading': row['heading'], 'color': row['color']} for row in existing_users}
 
                 if existing_users_data:
-                    print(f"Sending existing user data to {user_sid}: {len(existing_users_data)} users")
+                    logger.info(f"Sending existing user data to {user_sid}: {len(existing_users_data)} users")
                     emit('existing_users', {'users': existing_users_data})
 
                 new_user_data = {'lat': None, 'lon': None, 'heading': None, 'color': color, 'username': default_username}
-                print(f"Notifying room {share_code} of new user {user_sid}")
+                logger.info(f"Notifying room {share_code} of new user {user_sid}")
                 emit('user_joined', {'sid': user_sid, 'data': new_user_data}, room=share_code, skip_sid=user_sid)
 
                 emit_user_list_update(share_code)
 
             except sqlite3.IntegrityError: 
                  db.rollback()
-                 print(f"User {user_sid} might already exist in share {share_code}. Allowing join anyway.")
+                 logger.warning(f"User {user_sid} might already exist in share {share_code}. Allowing join anyway.")
                  join_room(share_code)
                  user_details = get_user_details(user_sid)
                  if user_details:
@@ -310,10 +389,10 @@ def handle_join_share(data):
 
             except sqlite3.Error as e:
                 db.rollback()
-                print(f"Database error on join_share: {e}")
+                logger.error(f"Database error on join_share: {e}")
                 emit('join_error', {'message': 'Failed to join share due to a database error.'})
         else:
-            print(f'User {user_sid} failed to join non-existent share {share_code}')
+            logger.warning(f'User {user_sid} failed to join non-existent share {share_code}')
             emit('join_error', {'message': f'Share code "{share_code}" not found.'})
 
 @socketio.on('location_update')

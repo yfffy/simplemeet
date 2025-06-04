@@ -19,7 +19,9 @@ console.log("Initializing main.js");
 
 // --- Configuration ---
 const SERVER_URL = window.location.origin; // Assumes backend is served from the same origin
-const UPDATE_INTERVAL_MS = 3000; // How often to send location updates
+const UPDATE_INTERVAL_MS = 5000; // Increased from 3000ms for better battery life
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY = 2000;
 
 // --- State ---
 let socket = null;
@@ -32,6 +34,9 @@ let username = null; // Store own username
 let locationWatchId = null;
 let lastPosition = null;
 let isIntentionalDisconnect = false; // Flag for intentional disconnect
+let reconnectAttempts = 0;
+let lastLocationUpdate = 0; // Timestamp of last location update
+let rateLimitDelay = 0; // Rate limiting for location updates
 
 // --- UI Elements ---
 const initialOptionsDiv = document.getElementById('initial-options');
