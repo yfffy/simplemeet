@@ -19,9 +19,10 @@ console.log("Initializing main.js");
 
 // --- Configuration ---
 const SERVER_URL = window.location.origin; // Assumes backend is served from the same origin
-const UPDATE_INTERVAL_MS = 5000; // Increased from 3000ms for better battery life
+const UPDATE_INTERVAL_MS = 3000; // Reduced for better real-time experience
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY = 2000;
+const LOCATION_UPDATE_RATE_LIMIT = 2000; // Minimum time between location updates (ms)
 
 // --- State ---
 let socket = null;
@@ -37,6 +38,8 @@ let isIntentionalDisconnect = false; // Flag for intentional disconnect
 let reconnectAttempts = 0;
 let lastLocationUpdate = 0; // Timestamp of last location update
 let rateLimitDelay = 0; // Rate limiting for location updates
+let isConnecting = false; // Connection state flag
+let offlineLocationQueue = []; // Queue for offline location updates
 
 // PWA State
 let deferredInstallPrompt = null;

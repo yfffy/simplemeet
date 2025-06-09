@@ -47,6 +47,27 @@ h1 {
     border-radius: var(--border-radius);
     font-weight: 500;
     box-shadow: var(--shadow);
+    transition: all 0.3s ease;
+}
+
+#status.status-success {
+    background: var(--success-color);
+    color: white;
+}
+
+#status.status-error {
+    background: var(--danger-color);
+    color: white;
+}
+
+#status.status-loading {
+    background: var(--secondary-color);
+    color: white;
+}
+
+#status.status-info {
+    background: var(--warning-color);
+    color: var(--dark-text);
 }
 
 /* Control sections */

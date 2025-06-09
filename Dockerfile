@@ -1,27 +1,44 @@
 # Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_ENV=production
+
+# Create a non-root user
+RUN addgroup --system --gid 1001 simplemeet && \
+    adduser --system --uid 1001 --gid 1001 --home /app simplemeet
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the requirements file and install Python dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Install any needed packages specified in requirements.txt
-# Use --no-cache-dir to reduce image size
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the application code into the container at /app
+# Copy the rest of the application code
 COPY . .
 
+# Create necessary directories and set permissions
+RUN mkdir -p db logs && \
+    chown -R simplemeet:simplemeet /app
+
+# Switch to non-root user
+USER simplemeet
+
 # Make port 5000 available to the world outside this container
-# Note: We'll run the app on this port inside the container
 EXPOSE 5000
 
-# Define environment variable (optional, can also be set in docker-compose)
-# ENV NAME World
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:5000', timeout=3)" || exit 1
 
-# Command to run the application using eventlet
-# Bind to 0.0.0.0 to accept connections from outside the container
-# Use the desired port 5000
-CMD ["python", "-m", "eventlet.wsgi", "-p", "5000", "--host", "0.0.0.0", "app:app"]
+# Command to run the application using gunicorn for production
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "app:app"]
